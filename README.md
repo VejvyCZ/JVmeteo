@@ -16,7 +16,7 @@ FW 1.0
 
 -Uživatelská volba komunikačních pinů pro senzory I2C a ANALOG
 
--Obrazovka nastavení ( 2x stirk tlačítka RESET vytvoří na omezenou dobu WiFi síť -pevně nastavená IP adresa)
+-Obrazovka nastavení ( 2x stisk tlačítka RESET vytvoří na omezenou dobu WiFi síť -pevně nastavená IP adresa)
 
 -V obrazovce nastavení lze změnit WiFi síť na kterou se JVmeteo připojuje, díky tomu je snadno přenositelný. Dále možnost vkládání API klíče pro zápis na thingspeak
 
