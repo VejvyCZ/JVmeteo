@@ -18,9 +18,9 @@
 #define TIMEOUT_KONFIGURACE_MS 300000  // 5 minut v rezimu nastaveni pred auto-restartem
 
 // Globalni promenne nastaveni
-String wifi_ssid = "Honzik";
-String wifi_pass = "lopatkovec1991";
-String thingspeak_api = "P1AOHL2K6NWDQBNF";
+String wifi_ssid = "SSID Wi-Fi";
+String wifi_pass = "heslo Wi-Fi";
+String thingspeak_api = "API PRO ZÁPIS";
 
 // Stavy senzoru (zaskrtnuto/nezaskrtnuto)
 bool en_bme280 = true, en_bmp280 = false, en_dht22 = false, en_mpu6050 = false, en_mq9 = false;
