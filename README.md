@@ -34,6 +34,8 @@ HW 1.1JOHN
 -Nově indikační led pro napětí 3,3V pro ESP
 
 -Nově možnost externích indikačních 3mm led (vyjma indikace externího napájení z USB C)
+
+-
 -
 -
 
@@ -62,15 +64,27 @@ Czech Republic
 KNIHOVNY, KTERÉ JE POTŘEBA STÁHNOUT PŘED NAHRÁNÍM FIRMWARE
 
 #include <WiFi.h>
+
 #include <WebServer.h>
+
 #include <WiFiClient.h>
+
 #include <Wire.h>
+
 #include <Preferences.h>
+
 #include "ThingSpeak.h" // Oficialni knihovna pro bezpecny prenos dat
 
+
 // Knihovny pro senzory
+
 #include <Adafruit_Sensor.h>
+
 #include <Adafruit_BME280.h>
+
 #include <Adafruit_BMP280.h>
+
 #include <Adafruit_MPU6050.h>
+
 #include <DHT.h>
+
