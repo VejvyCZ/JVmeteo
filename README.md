@@ -7,18 +7,32 @@ www.jvelektronika.cz
 -
 -
 JVmeteo COREON HW 1.1JOHN a FIRMWARE 1.0
+
 Aktuální vydání verze HW 1.1JOHN a FIRMWARE v 1.0
+
 FW 1.0
+
 -Podpora senzorů: BME280, BMP280, DHT22, MQ-9, MPU6050
+
 -Uživatelská volba komunikačních pinů pro senzory I2C a ANALOG
+
 -Obrazovka nastavení ( 2x stirk tlačítka RESET vytvoří na omezenou dobu WiFi síť -pevně nastavená IP adresa)
+
 -V obrazovce nastavení lze změnit WiFi síť na kterou se JVmeteo připojuje, díky tomu je snadno přenositelný. Dále možnost vkládání API klíče pro zápis na thingspeak
+
 -Optimalizovaná spotřeba pro solární panel, data se odesílájí každých 90s a poté se čip přepne do úsporného režimu.
+
+
 HW 1.1JOHN
+
 -Multi přepínač funkcí/nastavení
+
 -USB C pro plnohodnotnou datovou komunikaci pomocí CP2102
+
 -Druhé USB C pro připojení externího napájení/nabíjení akumulátoru
+
 -Nově indikační led pro napětí 3,3V pro ESP
+
 -Nově možnost externích indikačních 3mm led (vyjma indikace externího napájení z USB C)
 -
 -
