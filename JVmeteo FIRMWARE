@@ -1,0 +1,317 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <WiFiClient.h>
+#include <Wire.h>
+#include <Preferences.h>
+#include "ThingSpeak.h" // Oficialni knihovna pro bezpecny prenos dat
+
+// Knihovny pro senzory
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BME280.h>
+#include <Adafruit_BMP280.h>
+#include <Adafruit_MPU6050.h>
+#include <DHT.h>
+
+// Casove konstanty v milisekundach
+#define INTERVAL_SPANKU_MS 90000       // 90 sekund spanku mezi merenimi
+#define CAS_WEBSERVERU_MS 5000         // 5 sekund aktivniho webu pro zobrazeni dat pred usnutim
+#define TIMEOUT_KONFIGURACE_MS 300000  // 5 minut v rezimu nastaveni pred auto-restartem
+
+// Globalni promenne nastaveni
+String wifi_ssid = "Honzik";
+String wifi_pass = "lopatkovec1991";
+String thingspeak_api = "P1AOHL2K6NWDQBNF";
+
+// Stavy senzoru (zaskrtnuto/nezaskrtnuto)
+bool en_bme280 = true, en_bmp280 = false, en_dht22 = false, en_mpu6050 = false, en_mq9 = false;
+
+// Definice pinu pro kazdy senzor zvlast (nastavitelne pres web)
+int bme_sda = 6, bme_scl = 7;
+int bmp_sda = 6, bmp_scl = 7;
+int mpu_sda = 6, mpu_scl = 7;
+int dht_pin = 5;
+int mq9_pin = 2; 
+
+// Globalni namerene veliciny
+float teplota = 0.0, vlhkost = 0.0, tlak = 0.0;
+float mpu_ax = 0.0, mpu_ay = 0.0, mpu_az = 0.0;
+int mq9_raw = 0; 
+
+Preferences pref;
+WebServer server(80);
+WiFiClient client; // Klientsky objekt vyzadovany knihovnou ThingSpeak
+bool rezim_konfigurace = false;
+
+// --- Sablona HTML: Centrované rozvržení v jednom sloupci ---
+const char KONFIG_PAGE[] PROGMEM = R"rawliteral(
+<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Konfigurace Meteo</title>
+<style>
+body{font-family:sans-serif;margin:0;padding:20px;background:#f7f7f7;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;} 
+.container{width:100%;max-width:500px;display:flex;flex-direction:column;}
+form{background:white;padding:20px;border-radius:8px;box-shadow:0 2px 5px rgba(0,0,0,0.1);box-sizing:border-box;} 
+.sekce{margin-bottom:15px;padding-bottom:10px;border-bottom:1px solid #eee;} 
+label{display:inline-block;width:120px;font-size:14px;} 
+.brand{color:#0056b3;font-size:32px;font-weight:bold;margin-bottom:15px;text-align:center;width:100%;}
+</style></head><body>
+<div class='container'>
+<div class='brand'>JVmeteo COREON</div>
+<form method='POST'>
+<h2 style='text-align:center;margin-top:0;color:#555;font-size:20px;'>Nastaveni senzoru a site</h2>
+<div class='sekce'><h3>1. Vyber Aktivnich Senzoru</h3>
+<input type='checkbox' name='en_bme' %BME_CH%> <label style='width:auto;'>Aktivovat BME280 (I2C)</label><br>
+<input type='checkbox' name='en_bmp' %BMP_CH%> <label style='width:auto;'>Aktivovat BMP280 (I2C)</label><br>
+<input type='checkbox' name='en_mpu' %MPU_CH%> <label style='width:auto;'>Aktivovat MPU6050 (I2C)</label><br>
+<input type='checkbox' name='en_dht' %DHT_CH%> <label style='width:auto;'>Aktivovat DHT22 (Jednovodicovy)</label><br>
+<input type='checkbox' name='en_mq9' %MQ9_CH%> <label style='width:auto;'>Aktivovat MQ-9 (CO senzor analog)</label><br></div>
+<div class='sekce'><h3>2. Nastaveni Pinu</h3>
+<b>BME280:</b> SDA: <input type='number' name='bme_sda' value='%BME_SDA%' style='width:40px;'> SCL: <input type='number' name='bme_scl' value='%BME_SCL%' style='width:40px;'><br><br>
+<b>BMP280:</b> SDA: <input type='number' name='bmp_sda' value='%BMP_SDA%' style='width:40px;'> SCL: <input type='number' name='bmp_scl' value='%BMP_SCL%' style='width:40px;'><br><br>
+<b>MPU6050:</b> SDA: <input type='number' name='mpu_sda' value='%MPU_SDA%' style='width:40px;'> SCL: <input type='number' name='mpu_scl' value='%MPU_SCL%' style='width:40px;'><br><br>
+<b>DHT22 Data Pin:</b> <input type='number' name='dht_pin' value='%DHT_PIN%' style='width:40px;'><br><br>
+<b>MQ-9 Analog Pin:</b> <input type='number' name='mq9_pin' value='%MQ9_PIN%' style='width:40px;'></div>
+<div class='sekce'><h3>3. Sit a Cloud</h3>
+<label>WiFi SSID:</label><input type='text' name='ssid' value='%SSID%' style='width:60%;'><br><br>
+<label>WiFi Heslo:</label><input type='password' name='pass' value='%PASS%' style='width:60%;'><br><br>
+<label>ThingSpeak API:</label><input type='text' name='ts' value='%TS%' style='width:60%;'></div>
+<input type='submit' name='ulozit' value='Ulozit a Spustit' style='background:#28a745;color:white;padding:12px;border:none;border-radius:4px;cursor:pointer;font-size:16px;width:100%;font-weight:bold;'>
+</form></div></body></html>
+)rawliteral";
+
+// Inicializace I2C sbernic na vyzadani
+bool inicializuj_i2c(int sda, int scl) {
+  Wire.end(); 
+  Wire.begin(sda, scl);
+  return true;
+}
+
+// --- Nacteni dat ze vsech aktivovanych senzoru ---
+void cti_vsechny_senzory() {
+  if (en_bme280) {
+    inicializuj_i2c(bme_sda, bme_scl);
+    Adafruit_BME280 bme;
+    if (bme.begin(0x76, &Wire) || bme.begin(0x77, &Wire)) {
+      teplota = bme.readTemperature();
+      vlhkost = bme.readHumidity();
+      tlak = bme.readPressure() / 100.0F;
+    }
+  }
+  if (en_bmp280) {
+    inicializuj_i2c(bmp_sda, bmp_scl);
+    Adafruit_BMP280 bmp(&Wire); 
+    if (bmp.begin(0x76) || bmp.begin(0x77)) {
+      teplota = bmp.readTemperature();
+      tlak = bmp.readPressure() / 100.0F;
+    }
+  }
+  if (en_mpu6050) {
+    inicializuj_i2c(mpu_sda, mpu_scl);
+    Adafruit_MPU6050 mpu;
+    if (mpu.begin(0x68, &Wire) || mpu.begin(0x69, &Wire)) {
+      sensors_event_t a, g, temp;
+      mpu.getEvent(&a, &g, &temp);
+      mpu_ax = a.acceleration.x;
+      mpu_ay = a.acceleration.y;
+      mpu_az = a.acceleration.z;
+      if (!en_bme280 && !en_bmp280) { teplota = temp.temperature; }
+    }
+  }
+  if (en_dht22) {
+    DHT dht(dht_pin, DHT22);
+    dht.begin();
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    if (!isnan(t)) { teplota = t; }
+    if (!isnan(h)) { vlhkost = h; }
+  }
+  if (en_mq9) {
+    pinMode(mq9_pin, INPUT);
+    long suma = 0;
+    for (int i = 0; i < 5; i++) {
+      suma += analogRead(mq9_pin);
+      delay(20);
+    }
+    mq9_raw = suma / 5;
+  }
+}
+
+// --- Bezpecne odeslani dat pomoci oficialni knihovny ThingSpeak ---
+void odesli_na_thingspeak() {
+  if (WiFi.status() != WL_CONNECTED) { return; }
+  
+  // Prirazeni hodnot do jednotlivych poli na cloudu
+  ThingSpeak.setField(1, teplota);
+  ThingSpeak.setField(2, vlhkost);
+  ThingSpeak.setField(3, tlak);
+  ThingSpeak.setField(4, mpu_ax);
+  ThingSpeak.setField(5, mpu_ay);
+  ThingSpeak.setField(6, mpu_az);
+  ThingSpeak.setField(7, mq9_raw);
+  
+  // Zapis poli najednou pomoci Write API klice (Knihovna interne pouziva bezpecne mechanismy)
+  int response = ThingSpeak.writeFields(0, thingspeak_api.c_str()); 
+  if (response == 200) {
+    Serial.println("Data uspesne zapsana na ThingSpeak skrze oficialni API.");
+  } else {
+    Serial.print("Chyba odesilani ThingSpeak, kod: "); Serial.println(response);
+  }
+}
+
+// --- HTML Stranika: Rezim Normalniho spusteni ---
+void obsluha_normalni_web() {
+  cti_vsechny_senzory();
+  String html = "<!DOCTYPE html><html><head><meta charset='utf-8'><style>body{font-family:Arial;text-align:center;background:#eef2f3;color:#333;} .brand{color:#0056b3;font-size:24px;font-weight:bold;margin:15px;}</style></head><body>";
+  html += "<div class='brand'>JVmeteo COREON</div>";
+  html += "<h1>Meteostanice (Pred usnutim)</h1>";
+  html += "<div style='background:white;padding:20px;display:inline-block;border-radius:10px;text-align:left;'>";
+  html += "<h2>Aktualni hodnoty:</h2>";
+  html += "<p>Teplota: <b>" + String(teplota, 1) + " C</b></p>";
+  html += "<p>Vlhkost: <b>" + String(vlhkost, 1) + " %</b></p>";
+  html += "<p>Tlak: <b>" + String(tlak, 1) + " hPa</b></p>";
+  html += "<p>MPU6050 Osa X / Y / Z: <b>" + String(mpu_ax, 2) + " / " + String(mpu_ay, 2) + " / " + String(mpu_az, 2) + " m/s2</b></p>";
+  html += "<p>MQ-9 CO index (Raw ADC): <b>" + String(mq9_raw) + "</b></p>";
+  html += "</div><p>Za malou chvili stanice prejde do hlubokeho spanku na 90s.</p></body></html>";
+  server.send(200, "text/html", html);
+}
+
+// --- HTML Stranika: Rezim Konfigurace ---
+void obsluha_konfig_web() {
+  if (server.hasArg("ulozit")) {
+    en_bme280 = server.hasArg("en_bme");
+    en_bmp280 = server.hasArg("en_bmp");
+    en_mpu6050 = server.hasArg("en_mpu");
+    en_dht22 = server.hasArg("en_dht");
+    en_mq9 = server.hasArg("en_mq9");
+    
+    wifi_ssid = server.arg("ssid");
+    wifi_pass = server.arg("pass");
+    thingspeak_api = server.arg("ts");
+    bme_sda = server.arg("bme_sda").toInt(); bme_scl = server.arg("bme_scl").toInt();
+    bmp_sda = server.arg("bmp_sda").toInt(); bmp_scl = server.arg("bmp_scl").toInt();
+    mpu_sda = server.arg("mpu_sda").toInt(); mpu_scl = server.arg("mpu_scl").toInt();
+    dht_pin = server.arg("dht_pin").toInt();
+    mq9_pin = server.arg("mq9_pin").toInt();
+
+    pref.begin("meteo", false);
+    pref.putString("ssid", wifi_ssid); pref.putString("pass", wifi_pass); pref.putString("ts", thingspeak_api);
+    pref.putBool("en_bme", en_bme280); pref.putBool("en_bmp", en_bmp280); pref.putBool("en_mpu", en_mpu6050); pref.putBool("en_dht", en_dht22); pref.putBool("en_mq9", en_mq9);
+    pref.putInt("bme_sda", bme_sda); pref.putInt("bme_scl", bme_scl);
+    pref.putInt("bmp_sda", bmp_sda); pref.putInt("bmp_scl", bmp_scl);
+    pref.putInt("mpu_sda", mpu_sda); pref.putInt("mpu_scl", mpu_scl);
+    pref.putInt("dht_pin", dht_pin); pref.putInt("mq9_pin", mq9_pin);
+    pref.end();
+
+    server.send(200, "text/html", "<html><body><h2>Ulozeno. Restartuji...</h2></body></html>");
+    delay(2000);
+    ESP.restart();
+  }
+
+  String page = String(KONFIG_PAGE);
+  page.replace("%BME_CH%", en_bme280 ? "checked" : "");
+  page.replace("%BMP_CH%", en_bmp280 ? "checked" : "");
+  page.replace("%MPU_CH%", en_mpu6050 ? "checked" : "");
+  page.replace("%DHT_CH%", en_dht22 ? "checked" : "");
+  page.replace("%MQ9_CH%", en_mq9 ? "checked" : "");
+  page.replace("%BME_SDA%", String(bme_sda)); page.replace("%BME_SCL%", String(bme_scl));
+  page.replace("%BMP_SDA%", String(bmp_sda)); page.replace("%BMP_SCL%", String(bmp_scl));
+  page.replace("%MPU_SDA%", String(mpu_sda)); page.replace("%MPU_SCL%", String(mpu_scl));
+  page.replace("%DHT_PIN%", String(dht_pin)); page.replace("%MQ9_PIN%", String(mq9_pin));
+  page.replace("%SSID%", wifi_ssid); page.replace("%PASS%", wifi_pass);
+  page.replace("%TS%", thingspeak_api);
+
+  server.send(200, "text/html", page);
+  }
+  void setup() {
+  Serial.begin(115200);
+
+  // Inicializace ThingSpeak komunikacni vrstvy skrze WiFiClient objekt
+  ThingSpeak.begin(client);
+
+  pref.begin("meteo", true);
+  wifi_ssid = pref.getString("ssid", wifi_ssid);
+  wifi_pass = pref.getString("pass", wifi_pass);
+  thingspeak_api = pref.getString("ts", thingspeak_api);
+  en_bme280 = pref.getBool("en_bme", en_bme280);
+  en_bmp280 = pref.getBool("en_bmp", en_bmp280);
+  en_mpu6050 = pref.getBool("en_mpu", en_mpu6050);
+  en_dht22 = pref.getBool("en_dht", en_dht22);
+  en_mq9 = pref.getBool("en_mq9", en_mq9);
+  bme_sda = pref.getInt("bme_sda", bme_sda);
+  bme_scl = pref.getInt("bme_scl", bme_scl);
+  bmp_sda = pref.getInt("bmp_sda", bmp_sda);
+  bmp_scl = pref.getInt("bmp_scl", bmp_scl);
+  mpu_sda = pref.getInt("mpu_sda", mpu_sda);
+  mpu_scl = pref.getInt("mpu_scl", mpu_scl);
+  dht_pin = pref.getInt("dht_pin", dht_pin);
+  mq9_pin = pref.getInt("mq9_pin", mq9_pin);
+  int boot_count = pref.getInt("counter", 0);
+  pref.end();
+
+  boot_count++;
+  pref.begin("meteo", false);
+  pref.putInt("counter", boot_count);
+  pref.end();
+
+  delay(800);
+
+  if (boot_count >= 2) {
+  rezim_konfigurace = true;
+  pref.begin("meteo", false);
+  pref.putInt("counter", 0);
+  pref.end();
+  }
+
+  if (rezim_konfigurace) {
+  // Fixni nastaveni IP adres pro AP
+  IPAddress local_IP(192, 168, 4, 1);
+  IPAddress gateway(192, 168, 4, 1);
+  IPAddress subnet(255, 255, 255, 0);
+  WiFi.softAPConfig(local_IP, gateway, subnet);
+
+  WiFi.softAP("Meteo_Nastaveni");
+  server.on("/", obsluha_konfig_web);
+  server.begin();
+  }
+  else {
+  pref.begin("meteo", false);
+  pref.putInt("counter", 0);  
+  pref.end();
+
+  cti_vsechny_senzory();
+
+  WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+  int w_timeout = 0;
+  while (WiFi.status() != WL_CONNECTED && w_timeout < 20) {
+  delay(250);
+  w_timeout++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+  odesli_na_thingspeak();
+  server.on("/", obsluha_normalni_web);
+  server.begin();
+  }
+  }
+  }
+
+  void loop() {
+  server.handleClient();
+
+  if (rezim_konfigurace) {
+  if (millis() > TIMEOUT_KONFIGURACE_MS) {
+  ESP.restart();
+  }
+  }
+  else {
+  // Pokud jsme jiz pripojeni a data odesla, nebo pokud uplynulo 10s bez Wi-Fi
+  if (WiFi.status() == WL_CONNECTED || millis() > 10000) {
+  if (WiFi.status() == WL_CONNECTED) {
+  delay(1000); // Ponechat sbernici aktivni vterinu pro dokonceni zapisu na cloud
+  }
+  WiFi.disconnect(true);
+  delay(100);
+  ESP.deepSleep(INTERVAL_SPANKU_MS * 1000);
+  }
+  }
+  delay(10);
+  }
